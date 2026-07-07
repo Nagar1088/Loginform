@@ -11,10 +11,17 @@ from .utils import *
 
 class Authentication:
     @login_required
+
+    @never_cache
     def Dashboard(request):
         return render(request, "Dashboard.html")
+
     @never_cache
     def login(request):
+        # Clear old session data
+        if request.method == 'GET':
+            request.session.flush()
+
         email = ''
         pswd = ''
         error_email = ''
@@ -34,6 +41,7 @@ class Authentication:
                     authenticated_user = authenticate(request, username=user.username, password=pswd)
                     if authenticated_user:
                         auth_login(request, user)
+                        request.session.save()
                         return redirect('Dashboard')
                     error_pswd = 'Invalid Password'
                 except User.DoesNotExist:
@@ -54,6 +62,7 @@ class Authentication:
             'error_email': '',
             'error_pswd': '',
         })
+
 
 
     def signup(request):
@@ -96,7 +105,9 @@ class Authentication:
 
             try:
                 username = generate_username(data['email'])
-                user = User.objects.create_user(
+
+                # MySQL (default database)
+                user = User.objects.db_manager('default').create_user(
                     username=username,
                     email=data['email'],
                     phone=data['phone'],
@@ -104,9 +115,36 @@ class Authentication:
                     first_name=data['first_name'],
                     last_name=data['last_name'],
                 )
+
+                # SQLite database
+                User.objects.db_manager('sqlite').create_user(
+                    username=username,
+                    email=data['email'],
+                    phone=data['phone'],
+                    password=data['pswd'],
+                    first_name=data['first_name'],
+                    last_name=data['last_name'],
+                )
+
                 auth_login(request, user)
                 messages.success(request, 'Account created successfully!')
                 return redirect('login')
+
+
+                # username = generate_username(data['email'])
+                # user = User.objects.create_user(
+                #     username=username,
+                #     email=data['email'],
+                #     phone=data['phone'],
+                #     password=data['pswd'],
+                #     first_name=data['first_name'],
+                #     last_name=data['last_name'],
+                # )
+                # auth_login(request, user)
+                # messages.success(request, 'Account created successfully!')
+                # return redirect('login')
+
+
             except Exception as e:
                 messages.error(request, f'Error creating account: {str(e)}')
                 return render(request, 'login.html', {
@@ -125,11 +163,28 @@ class Authentication:
             **errors,
         })
 
+
     @login_required
+    @never_cache
     def logout_user(request):
+        # Flush session and logout
+        request.session.flush()
+        request.session.clear()
         logout(request)
+
+        # Delete cookies
+        response = redirect('login')
+        response.delete_cookie('sessionid')
+        response.delete_cookie('csrftoken')
+
+        # Create response with cache-control headers
+        response['Cache-Control'] = 'no-cache, no-store, must-revalidate, private'
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = '0'
+
         messages.success(request, 'Logged out successfully')
-        return redirect('login')
+        return response
+
 
     def forgot_password(request):
         msg = []
@@ -154,16 +209,33 @@ class Authentication:
                     messages.error(request, 'No user with this email.')
                 return redirect('forget')
 
+
             elif 'verify_otp' in request.POST:
                 otp_input = request.POST.get('otp').strip()
-                success, error = verify_otp(request, otp_input)
+
+                success, error, otp_expired = verify_otp(request, otp_input)
+
                 if success:
                     request.session['step'] = 'reset_password'
                     request.session['otp_expired'] = False
                     messages.success(request, 'OTP verified. Now reset your password.')
                 else:
+                    request.session['otp_expired'] = otp_expired   # <-- Ye line add karo
                     messages.error(request, error)
+
                 return redirect('forget')
+
+            # elif 'verify_otp' in request.POST:
+            #     otp_input = request.POST.get('otp').strip()
+            #     # success, error = verify_otp(request, otp_input)
+            #     success, error, otp_expired = verify_otp(request, otp_input)
+            #     if success:
+            #         request.session['step'] = 'reset_password'
+            #         request.session['otp_expired'] = False
+            #         messages.success(request, 'OTP verified. Now reset your password.')
+            #     else:
+            #         messages.error(request, error)
+            #     return redirect('forget')
 
             elif 'resend_otp' in request.POST:
                 email = request.session.get('otp_email') or request.session.get('email')

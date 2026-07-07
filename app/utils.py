@@ -7,7 +7,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 
 User = get_user_model()
-OTP_VALID_SECONDS = 120
+OTP_VALID_SECONDS = 300
 
 def validate_name(name, field_name, max_length=None):
     if not name:
@@ -64,27 +64,53 @@ def generate_username(email):
         username = f"{username}{random.randint(1, 999)}"
     return username
 
-def send_otp_email(request, otp_input):
-    stored_otp = request.session.get('otp')
-    otp_created_at = float(request.session.get('otp_created_at', 0))
+def send_otp_email(request, email):
+    otp = str(random.randint(100000, 999999))
 
-    if (time.time() - otp_created_at) > OTP_VALID_SECONDS:
-        request.session['otp_expired'] = True
-        return False, 'OTP has expired. Please resend a new one.'
+    request.session['otp'] = otp
+    request.session['otp_email'] = email
+    request.session['otp_created_at'] = time.time()
 
-    if not stored_otp or otp_input != stored_otp:
-        return False, 'Invalid OTP.'
+    try:
+        send_mail(
+            subject='Password Reset OTP',
+            message=f'Your OTP is: {otp}\nIt is valid for 5 minutes.',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
-    request.session['otp_expired'] = False
-    return True, None
+# def verify_otp(request, otp_input):
+#     stored_otp = request.session.get('otp')
+#     otp_created_at = float(request.session.get('otp_created_at', 0))
+
+#     if (time.time() - otp_created_at) > OTP_VALID_SECONDS:
+#         return False, 'OTP has expired. Please request a new one.'
+#     if not stored_otp or otp_input != stored_otp:
+#         return False, 'Invalid OTP.'
+#     return True, None
+
+OTP_VALID_SECONDS = 300  # 5 minutes
 
 def verify_otp(request, otp_input):
     stored_otp = request.session.get('otp')
     otp_created_at = float(request.session.get('otp_created_at', 0))
 
+    if not stored_otp:
+        return False, 'No OTP found. Please request a new OTP.', True
+
     if (time.time() - otp_created_at) > OTP_VALID_SECONDS:
-        return False, 'OTP has expired. Please request a new one.'
-    if not stored_otp or otp_input != stored_otp:
-        return False, 'Invalid OTP.'
-    return True, None
+        # Expired OTP ko remove kar do
+        request.session.pop('otp', None)
+        request.session.pop('otp_created_at', None)
+
+        return False, 'OTP has expired. Please request a new OTP.', True
+
+    if otp_input != stored_otp:
+        return False, 'Invalid OTP.', False
+
+    return True, None, False
 
